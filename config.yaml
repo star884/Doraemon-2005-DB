@@ -3,7 +3,6 @@ output_json: "data/doraemon_episodes.json"
 output_csv: "data/doraemon_episodes.csv"
 
 selectors:
-  season_link: "a[href*='/season-']"
   episode_table: "table.wikitable, table.episode-list, .wikitable"
   episode_row: "tr"
   episode_number: "td:first-child, th:first-child"
@@ -12,3 +11,6 @@ selectors:
 
 delay_between_requests: 2.0
 max_seasons: 20
+
+# NEW: Auto-detect season link selector (tries multiple patterns)
+auto_detect_selectors: true
