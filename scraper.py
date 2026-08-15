@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Doraemon Wiki Episode Scraper v3.0
+Doraemon Wiki Episode Scraper v4.0 - Auto Selector Detection
 Automatically scrapes, organizes, and stores episode data in JSON AND CSV.
-Handles multi-page season structure - extracts season links then visits each.
+Includes auto-detection of season links with multiple selector fallbacks.
 Designed for GitHub Actions integration.
 """
 
@@ -33,15 +33,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 class DoraemonScraper:
     """Main scraper class for Doraemon wiki episode data with multi-page support."""
+    
+    # Multiple selector fallbacks - tries each until one finds links
+    SEASON_SELECTORS = [
+        "a[href*='/season-']",      # lowercase hyphen
+        "a[href*='/Season-']",      # capital S hyphen  
+        "a[href*='/season%20']",    # encoded space
+        "a[href*='/Season%20']",    # capital S encoded space
+        "a[href*='season']",        # any case substring
+        "a:contains('Season')",     # by link text
+        "li > a, ul > li > a",      # list items
+        "nav a, .nav a",            # navigation links
+    ]
     
     def __init__(self, config_path: str = 'config.yaml'):
         self.config = self._load_config(config_path)
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (compatible; DoraemonScraper/3.0; +https://github.com/yourusername/doraemon-scraper)',
+            'User-Agent': 'Mozilla/5.0 (compatible; DoraemonScraper/4.0; +https://github.com/yourusername/doraemon-scraper)',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5'
         })
@@ -65,7 +76,6 @@ class DoraemonScraper:
             'output_json': 'data/doraemon_episodes.json',
             'output_csv': 'data/doraemon_episodes.csv',
             'selectors': {
-                'season_link': "a[href*='/season-']",
                 'episode_table': 'table.wikitable, table.episode-list, .wikitable',
                 'episode_row': 'tr',
                 'episode_number': 'td:first-child, th:first-child',
@@ -73,7 +83,8 @@ class DoraemonScraper:
                 'title': 'td:nth-child(3) a, td:nth-child(3), th:nth-child(3) a, th:nth-child(3)'
             },
             'delay_between_requests': 2.0,
-            'max_seasons': 20
+            'max_seasons': 20,
+            'auto_detect_selectors': True  # NEW: Enable auto-detection
         }
     
     def fetch_page(self, url: str, retries: int = 3) -> Optional[BeautifulSoup]:
@@ -94,31 +105,98 @@ class DoraemonScraper:
         
         return None
     
-    def extract_season_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
-        """Extract all season page links from the main page."""
-        selectors = self.config.get('selectors', {})
+    def extract_season_links_auto(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """Extract season links using auto-detected selector from multiple options."""
+        logger.info("🔍 Attempting to auto-detect season link selector...")
+        
+        # Try each selector until one finds links
+        for selector in self.SEASON_SELECTORS:
+            logger.info(f"   Trying selector: {selector}")
+            
+            try:
+                links = soup.select(selector)
+                
+                if not links:
+                    logger.debug(f"   ✗ No matches for '{selector}'")
+                    continue
+                
+                logger.info(f"   ✓ Found {len(links)} potential links with selector: {selector}")
+                
+                # Collect valid season URLs
+                season_links = []
+                for link in links:
+                    href = link.get('href', '')
+                    if not href:
+                        continue
+                    
+                    full_url = urljoin(base_url, href)
+                    
+                    # Verify it looks like a season page (contains 'season' anywhere)
+                    if 'season' in full_url.lower() or 'season' in link.get_text().lower():
+                        if full_url not in season_links:
+                            season_links.append(full_url)
+                            logger.info(f"     → {full_url}")
+                
+                if season_links:
+                    logger.info(f"✅ SUCCESS: Auto-detected selector '{selector}' works!")
+                    return season_links
+                    
+            except Exception as e:
+                logger.debug(f"   ✗ Selector '{selector}' failed: {e}")
+                continue
+        
+        logger.error("❌ No selector worked - checking ALL links manually")
+        
+        # Last resort: scan ALL links and filter manually
+        all_links = soup.find_all('a', href=True)
         season_links = []
         
-        link_selectors = selectors.get('season_link', "a[href*='/season-']")
-        links = soup.select(link_selectors)
-        
-        logger.info(f"Looking for season links with selector: {link_selectors}")
-        logger.info(f"Found {len(links)} potential links")
-        
-        for link in links:
+        for link in all_links:
             href = link.get('href', '')
             if not href:
                 continue
             
             full_url = urljoin(base_url, href)
+            link_text = link.get_text().strip()
             
-            if 'season-' in full_url.lower():
-                if full_url not in season_links:
-                    season_links.append(full_url)
-                    logger.info(f"  ✓ Found season: {full_url}")
+            # Check if either URL or text contains 'season'
+            if ('season' in full_url.lower() or 'season' in link_text.lower()):
+                # Exclude non-season pages (about, contact, etc.)
+                if not any(exclude in full_url.lower() for exclude in ['contact', 'about', 'admin', 'login']):
+                    if full_url not in season_links:
+                        season_links.append(full_url)
+                        logger.info(f"   Manual match: {full_url}")
         
-        logger.info(f"Total valid season pages: {len(season_links)}")
+        logger.info(f"Manual scan found {len(season_links)} season links")
         return season_links
+    
+    def extract_season_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """Extract season links from the main page (uses auto-detection if enabled)."""
+        auto_detect = self.config.get('auto_detect_selectors', True)
+        
+        if auto_detect:
+            return self.extract_season_links_auto(soup, base_url)
+        else:
+            # Use configured selector from config.yaml
+            selectors = self.config.get('selectors', {})
+            season_links = []
+            
+            link_selector = selectors.get('season_link', "a[href*='/season-']")
+            links = soup.select(link_selector)
+            
+            for link in links:
+                href = link.get('href', '')
+                if not href:
+                    continue
+                
+                full_url = urljoin(base_url, href)
+                
+                if 'season' in full_url.lower():
+                    if full_url not in season_links:
+                        season_links.append(full_url)
+                        logger.info(f"  ✓ Found season: {full_url}")
+            
+            return season_links
     
     def extract_episodes_from_season_page(self, soup: BeautifulSoup, season_url: str, 
                                            season_name: str) -> List[Dict[str, Any]]:
@@ -131,6 +209,7 @@ class DoraemonScraper:
         
         logger.info(f"  Found {len(valid_tables)} tables on {season_name} page")
         
+        # Get all row IDs that belong to valid tables
         valid_row_ids = set()
         for table in valid_tables:
             for row in table.find_all('tr'):
@@ -142,12 +221,15 @@ class DoraemonScraper:
             
             cells = row.find_all(['td', 'th'])
             
+            # Skip rows with fewer than 2 cells
             if len(cells) < 2:
                 continue
             
+            # Skip header rows (colspan)
             if any(cell.get('colspan') for cell in cells):
                 continue
             
+            # Skip very short rows (spacers/dividers)
             total_text = sum(len(cell.get_text(strip=True)) for cell in cells)
             if total_text < 5:
                 continue
@@ -158,6 +240,7 @@ class DoraemonScraper:
                 'scraped_at': datetime.now().isoformat()
             }
             
+            # Extract episode number
             num_cell = cells[0]
             if num_cell:
                 raw_text = self._clean_text(num_cell.get_text())
@@ -165,12 +248,14 @@ class DoraemonScraper:
             else:
                 episode['episode_number'] = None
             
+            # Extract season/episode reference
             season_ref_cell = cells[1] if len(cells) > 1 else None
             if season_ref_cell:
                 episode['season_episode'] = self._clean_text(season_ref_cell.get_text())
             else:
                 episode['season_episode'] = None
             
+            # Extract title
             title_cell = cells[2] if len(cells) > 2 else None
             if title_cell:
                 link = title_cell.find('a')
@@ -308,14 +393,16 @@ class DoraemonScraper:
     def run(self) -> bool:
         """Execute the complete scraping pipeline."""
         logger.info("=" * 60)
-        logger.info("🚀 Starting Doraemon Multi-Page Episode Scraper v3.0")
+        logger.info("🚀 Starting Doraemon Multi-Page Episode Scraper v4.0")
         logger.info(f"📍 Target: {self.config['target_url']}")
+        logger.info("🔧 Mode: AUTO SELECTOR DETECTION ENABLED")
         logger.info("=" * 60)
         
         start_time = time.time()
         all_episodes = []
         seasons_scraped = 0
         
+        # Fetch main page
         main_soup = self.fetch_page(self.config['target_url'])
         
         if not main_soup:
@@ -324,13 +411,23 @@ class DoraemonScraper:
         
         logger.info("✓ Main page fetched successfully")
         
+        # Extract season links (auto-detects if enabled)
         season_links = self.extract_season_links(main_soup, self.config['target_url'])
         
         if not season_links:
-            logger.error("❌ No season links found - check selectors in config.yaml")
-            logger.error("   Make sure selector matches lowercase '/season-' format")
+            logger.error("❌ No season links found after trying all selectors")
+            logger.error("   Possible issues:")
+            logger.error("   1. Website structure changed")
+            logger.error("   2. Anti-scraping measures blocking requests")
+            logger.error("   3. Different URL format than expected")
+            logger.error("")
+            logger.error("   SOLUTION: Check scraper.log for detailed selector attempts")
+            logger.error("             Or disable auto_detect_selectors and set manual selector")
             return False
         
+        logger.info(f"🎯 Successfully detected {len(season_links)} season pages")
+        
+        # Visit each season page
         max_seasons = self.config.get('max_seasons', 20)
         
         for i, season_url in enumerate(season_links[:max_seasons]):
@@ -352,6 +449,7 @@ class DoraemonScraper:
             all_episodes.extend(episodes)
             seasons_scraped += 1
         
+        # Validate
         if not all_episodes:
             logger.error("❌ No episodes extracted across all pages - verify selectors")
             return False
@@ -360,9 +458,11 @@ class DoraemonScraper:
         validation_rate = valid_count / len(all_episodes) * 100
         logger.info(f"📋 Validation: {valid_count}/{len(all_episodes)} episodes ({validation_rate:.1f}%) have titles")
         
+        # Save
         json_saved = self.save_to_json(all_episodes, self.config['output_json'])
         csv_saved = self.save_to_csv(all_episodes, self.config.get('output_csv'))
         
+        # Summary
         self._create_summary(all_episodes, seasons_scraped, start_time)
         
         elapsed = time.time() - start_time
@@ -378,11 +478,10 @@ class DoraemonScraper:
     
     def _extract_season_name(self, url: str) -> str:
         """Extract season name from URL."""
-        season_match = re.search(r'season-(\d+)', url, re.IGNORECASE)
+        season_match = re.search(r'season[-%]?(\d+)', url, re.IGNORECASE)
         if season_match:
             return f"Season {season_match.group(1)}"
         return f"Unknown_Season_{hash(url) % 1000}"
-
 
 if __name__ == '__main__':
     scraper = DoraemonScraper()
