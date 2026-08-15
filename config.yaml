@@ -1,18 +1,14 @@
 target_url: "https://tsuki.page/wiki/doraemon/2005-present"
 output_json: "data/doraemon_episodes.json"
-
-# Only JSON output
-output_csv: null
+output_csv: "data/doraemon_episodes.csv"
 
 selectors:
-  # Match lowercase "season-" in href (e.g., /season-11, /season-12)
-  season_link: "a[href*='/season-'], a[href*='season-']"
-  episode_table: "table.wikitable, table.episode-list, .wikitable"
+  season_link: "a[href*='/season-']"
+  episode_table: "table.wikitable, table.episode-list"
   episode_row: "tr"
   episode_number: "td:first-child, th:first-child"
   season_episode: "td:nth-child(2), th:nth-child(2)"
-  title: "td:nth-child(3) a, td:nth-child(3), th:nth-child(3) a, th:nth-child(3)"
-  
-# Rate limiting
+  title: "td:nth-child(3) a, td:nth-child(3)"
+
 delay_between_requests: 2.0
 max_seasons: 20
