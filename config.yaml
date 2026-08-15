@@ -3,13 +3,14 @@ output_json: "data/doraemon_episodes.json"
 output_csv: "data/doraemon_episodes.csv"
 
 selectors:
-  # Adjust these based on actual page inspection
-  episode_table: "table.wikitable, table.episode-list, tbody"
+  # Match season links on main page
+  season_link: "a[href*=\"season\"], a[href*=\"/Season \"]"
+  episode_table: "table.wikitable, table.episode-list"
   episode_row: "tr"
-  episode_number: "td:first-child"
-  season_episode: "td:nth-child(2)"
+  episode_number: "td:first-child, th:first-child"
+  season_episode: "td:nth-child(2), th:nth-child(2)"
   title: "td:nth-child(3) a, td:nth-child(3)"
   
-follow_links: true
-delay_between_requests: 1.5
-max_pages: 50
+# Rate limiting and pagination
+delay_between_requests: 2.0
+max_seasons: 50
