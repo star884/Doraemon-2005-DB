@@ -1,45 +1,48 @@
-name: Automate Web Scraper
+name: Daily Episode Scrape
 
 on:
   schedule:
-    # Runs daily at midnight UTC
-    - cron: '0 0 * * *'
-  workflow_dispatch: # Allows manual run from GitHub Actions tab
-
-permissions:
-  contents: write
+    - cron: '0 6 * * *'  # Run daily at 6 AM UTC
+  workflow_dispatch:  # Allow manual trigger
 
 jobs:
-  scrape-and-commit:
+  scrape:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+        with:
+          persist-credentials: false
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-
-      - name: Install Dependencies
+          python-version: '3.11'
+      
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install --with-deps chromium
-
-      - name: Run Scraper
+      
+      - name: Run scraper
+        env:
+          TARGET_URL: ${{ secrets.TARGET_URL }}
+        run: python scraper.py
+      
+      - name: Commit and push if changes
         run: |
-          python scraper.py
-
-      - name: Commit and Push Updated Data
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/doraemon.json output/doraemon.csv
-          if git diff --cached --quiet; then
-            echo "No changes detected in scraped data."
-          else
-            git commit -m "chore: auto-update scraped Doraemon wiki data [skip ci]"
-            git push
-          fi
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/
+          git diff --quiet && git diff --staged --quiet || (
+            git commit -m "chore: Update episode data [skip ci]"
+            git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:${{ github.ref }}
+          )
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: episode-data-${{ github.run_id }}
+          path: data/
+          retention-days: 30
